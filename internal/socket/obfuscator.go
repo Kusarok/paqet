@@ -4,9 +4,19 @@ import (
 	"encoding/binary"
 	"hash/fnv"
 	"math/rand"
+	"sync"
 )
 
 const NonceSize = 2 // 2 bytes for uint16 nonce
+
+// Buffer pool for reducing allocations
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		// Allocate 2KB buffers (enough for MTU + overhead)
+		buf := make([]byte, 2048)
+		return &buf
+	},
+}
 
 // Obfuscator handles dynamic packet obfuscation using FNV-1a key derivation
 type Obfuscator struct {
@@ -78,8 +88,16 @@ func (o *Obfuscator) Obfuscate(rawData []byte) []byte {
 	dataLen := uint16(len(rawData))
 	totalSize := NonceSize + 2 + int(dataLen) + paddingSize
 
-	// Create output buffer
-	output := make([]byte, totalSize)
+	// Try to get buffer from pool, or allocate if too large
+	var output []byte
+	var pooledBuf *[]byte
+	if totalSize <= 2048 {
+		pooledBuf = bufferPool.Get().(*[]byte)
+		output = (*pooledBuf)[:totalSize]
+	} else {
+		// For large packets, allocate directly
+		output = make([]byte, totalSize)
+	}
 
 	// Write Nonce (2 bytes)
 	binary.BigEndian.PutUint16(output[0:2], nonce)
@@ -97,6 +115,14 @@ func (o *Obfuscator) Obfuscate(rawData []byte) []byte {
 
 	// XOR encrypt everything after nonce (Length + Data + Padding)
 	o.xorData(output[2:], packetKey)
+
+	// For pooled buffers, make a copy to return (pool buffer will be reused)
+	if pooledBuf != nil {
+		result := make([]byte, totalSize)
+		copy(result, output)
+		bufferPool.Put(pooledBuf)
+		return result
+	}
 
 	return output
 }
@@ -119,9 +145,18 @@ func (o *Obfuscator) Deobfuscate(obfuscatedData []byte) ([]byte, bool) {
 	// Derive packet key
 	packetKey := o.derivePacketKey(nonce)
 
-	// Decrypt everything after nonce in-place (or copy if needed)
-	// We work on a copy to avoid modifying the input slice if it's reused elsewhere
-	decrypted := make([]byte, len(obfuscatedData)-NonceSize)
+	// Try to get buffer from pool for decryption
+	decryptedSize := len(obfuscatedData) - NonceSize
+	var decrypted []byte
+	var pooledBuf *[]byte
+	if decryptedSize <= 2048 {
+		pooledBuf = bufferPool.Get().(*[]byte)
+		decrypted = (*pooledBuf)[:decryptedSize]
+	} else {
+		decrypted = make([]byte, decryptedSize)
+	}
+
+	// Decrypt everything after nonce
 	copy(decrypted, obfuscatedData[NonceSize:])
 	o.xorData(decrypted, packetKey)
 
@@ -130,11 +165,22 @@ func (o *Obfuscator) Deobfuscate(obfuscatedData []byte) ([]byte, bool) {
 
 	// Validate length sanity
 	if int(dataLen) > len(decrypted)-2 {
+		if pooledBuf != nil {
+			bufferPool.Put(pooledBuf)
+		}
 		return nil, false // Corrupted or spoofed packet
 	}
 
-	// Return actual data (skip 2 bytes length header)
-	return decrypted[2 : 2+dataLen], true
+	// Copy actual data to return
+	result := make([]byte, dataLen)
+	copy(result, decrypted[2:2+dataLen])
+
+	// Return buffer to pool
+	if pooledBuf != nil {
+		bufferPool.Put(pooledBuf)
+	}
+
+	return result, true
 }
 
 // GetOverhead returns the average size overhead added by obfuscation

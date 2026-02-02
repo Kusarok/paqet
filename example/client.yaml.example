@@ -38,9 +38,9 @@ network:
     local_flag: ["PA"]                      # Local TCP flags (Push+Ack default)
     remote_flag: ["PA"]                     # Remote TCP flags (Push+Ack default)
   
-  # PCAP settings (optional - will use defaults)
+  # PCAP settings (optional - will use optimized defaults)
   pcap:
-    sockbuf: 4194304                        # 4MB buffer (default for client)
+    sockbuf: 8388608                        # 8MB buffer (optimized default for client, was 1MB)
 
 # Server connection settings
 server:
@@ -49,22 +49,24 @@ server:
 # Transport protocol configuration
 transport:
   protocol: "kcp"  # Transport protocol (currently only "kcp" supported)
-  conn: 1          # Number of connections (1-256, default: 1)
+  conn: 1          # Number of connections (1-256, increase for higher throughput)
   
   # KCP protocol settings
   kcp:
-    mode: "fast"           # KCP mode: normal, fast, fast2, fast3
+    mode: "fast3"          # KCP mode: normal, fast, fast2, fast3 (fast3 = lowest latency)
     mtu: 1350              # Maximum transmission unit (50-1500)
-    rcvwnd: 512            # Receive window size (default for client)  
-    sndwnd: 512            # Send window size (default for client)
+    rcvwnd: 1024           # Receive window size (optimized default: 1024, was 512)
+    sndwnd: 1024           # Send window size (optimized default: 1024, was 512)
     
     # Encryption settings
     block: "aes"                    # Encryption: aes, aes-128, aes-128-gcm, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none.
     key: "your-secret-key-here"     # CHANGE ME: Secret key (must match server)
     
-    # Buffer settings (optional)
+    # Buffer settings (optional - optimized defaults applied)
     smuxbuf: 4194304       # 4MB SMUX buffer
     streambuf: 2097152     # 2MB stream buffer
+    sockbuf_rcv: 4194304   # 4MB socket receive buffer (optimized default)
+    sockbuf_snd: 4194304   # 4MB socket send buffer (optimized default)
 
 # Optional Forward Error Correction (FEC) - currently disabled
 # Use these only if you need FEC for very lossy networks:

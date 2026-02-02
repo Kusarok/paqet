@@ -21,6 +21,10 @@ type KCP struct {
 	Smuxbuf   int `yaml:"smuxbuf"`
 	Streambuf int `yaml:"streambuf"`
 
+	// Socket buffer sizes (UDP layer)
+	SocketRcvbuf int `yaml:"sockbuf_rcv"` // Socket receive buffer size
+	SocketSndbuf int `yaml:"sockbuf_snd"` // Socket send buffer size
+
 	Block kcp.BlockCrypt `yaml:"-"`
 }
 
@@ -35,16 +39,16 @@ func (k *KCP) setDefaults(role string) {
 
 	if k.Rcvwnd == 0 {
 		if role == "server" {
-			k.Rcvwnd = 1024
+			k.Rcvwnd = 2048 // Increased from 1024 for better throughput
 		} else {
-			k.Rcvwnd = 512
+			k.Rcvwnd = 1024 // Increased from 512 for better throughput
 		}
 	}
 	if k.Sndwnd == 0 {
 		if role == "server" {
-			k.Sndwnd = 1024
+			k.Sndwnd = 2048 // Increased from 1024 for better throughput
 		} else {
-			k.Sndwnd = 512
+			k.Sndwnd = 1024 // Increased from 512 for better throughput
 		}
 	}
 
@@ -64,6 +68,22 @@ func (k *KCP) setDefaults(role string) {
 	}
 	if k.Streambuf == 0 {
 		k.Streambuf = 2 * 1024 * 1024
+	}
+
+	// Socket buffer sizes - critical for high throughput
+	if k.SocketRcvbuf == 0 {
+		if role == "server" {
+			k.SocketRcvbuf = 8 * 1024 * 1024 // 8MB for server
+		} else {
+			k.SocketRcvbuf = 4 * 1024 * 1024 // 4MB for client
+		}
+	}
+	if k.SocketSndbuf == 0 {
+		if role == "server" {
+			k.SocketSndbuf = 8 * 1024 * 1024 // 8MB for server
+		} else {
+			k.SocketSndbuf = 4 * 1024 * 1024 // 4MB for client
+		}
 	}
 }
 
@@ -104,6 +124,20 @@ func (k *KCP) validate() []error {
 	}
 	if k.Streambuf < 1024 {
 		errors = append(errors, fmt.Errorf("KCP streambuf must be >= 1024 bytes"))
+	}
+
+	// Validate socket buffer sizes
+	if k.SocketRcvbuf < 64*1024 {
+		errors = append(errors, fmt.Errorf("KCP socket receive buffer must be >= 64KB"))
+	}
+	if k.SocketSndbuf < 64*1024 {
+		errors = append(errors, fmt.Errorf("KCP socket send buffer must be >= 64KB"))
+	}
+	if k.SocketRcvbuf > 128*1024*1024 {
+		errors = append(errors, fmt.Errorf("KCP socket receive buffer too large (max 128MB)"))
+	}
+	if k.SocketSndbuf > 128*1024*1024 {
+		errors = append(errors, fmt.Errorf("KCP socket send buffer too large (max 128MB)"))
 	}
 
 	return errors

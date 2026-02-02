@@ -27,17 +27,16 @@ func aplConf(conn *kcp.UDPSession, cfg *conf.KCP) {
 		wDelay, ackNoDelay = false, true
 	}
 
-	// Add jitter to interval for timing obfuscation
-	intervalJitter := interval + rand.Intn(5) - 2 // ±2ms randomness
-	if intervalJitter < 5 {
-		intervalJitter = 5
-	}
-	
-	conn.SetNoDelay(noDelay, intervalJitter, resend, noCongestion)
+	// Use consistent interval without jitter for stable RTT estimation
+	conn.SetNoDelay(noDelay, interval, resend, noCongestion)
 	conn.SetWindowSize(cfg.Sndwnd, cfg.Rcvwnd)
 	conn.SetMtu(cfg.MTU)
 	conn.SetWriteDelay(wDelay)
 	conn.SetACKNoDelay(ackNoDelay)
+	
+	// Set socket buffer sizes for high throughput
+	conn.SetReadBuffer(cfg.SocketRcvbuf)
+	conn.SetWriteBuffer(cfg.SocketSndbuf)
 	
 	// Randomize DSCP to avoid fingerprinting (0=normal, 8=CS1, 10=AF11, 18=AF21)
 	dscpValues := []int{0, 0, 0, 8, 10, 18} // Weighted towards 0 (normal traffic)
