@@ -3,6 +3,7 @@ package socket
 import (
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"net"
 	"paqet/internal/conf"
 	"paqet/internal/pkg/hash"
@@ -10,7 +11,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -24,22 +24,18 @@ type TCPF struct {
 }
 
 type SendHandle struct {
-	handle      *pcap.Handle
-	srcIPv4     net.IP
-	srcIPv4RHWA net.HardwareAddr
-	srcIPv6     net.IP
-	srcIPv6RHWA net.HardwareAddr
-	srcPort     uint16
-	synOptions  []layers.TCPOption
-	ackOptions  []layers.TCPOption
-	time        uint32
-	tsCounter   uint32
-	tcpF        TCPF
-	ethPool     sync.Pool
-	ipv4Pool    sync.Pool
-	ipv6Pool    sync.Pool
-	tcpPool     sync.Pool
-	bufPool     sync.Pool
+	handle    *pcap.Handle
+	srcIP4    conf.Addr
+	srcIP6    conf.Addr
+	srcPort   uint16
+	time      uint32
+	tsCounter uint32
+	tcpF      TCPF
+	ethPool   sync.Pool
+	ipv4Pool  sync.Pool
+	ipv6Pool  sync.Pool
+	tcpPool   sync.Pool
+	bufPool   sync.Pool
 }
 
 func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
@@ -55,27 +51,17 @@ func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
 		}
 	}
 
-	synOptions := []layers.TCPOption{
-		{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: []byte{0x05, 0xb4}},
-		{OptionType: layers.TCPOptionKindSACKPermitted, OptionLength: 2},
-		{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: make([]byte, 8)},
-		{OptionType: layers.TCPOptionKindNop},
-		{OptionType: layers.TCPOptionKindWindowScale, OptionLength: 3, OptionData: []byte{8}},
-	}
-
-	ackOptions := []layers.TCPOption{
-		{OptionType: layers.TCPOptionKindNop},
-		{OptionType: layers.TCPOptionKindNop},
-		{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: make([]byte, 8)},
-	}
+	// Seed random if strictly needed, though Go 1.20+ does it automatically.
+	// We use global rand for simplicity.
 
 	sh := &SendHandle{
-		handle:     handle,
-		srcPort:    uint16(cfg.Port),
-		synOptions: synOptions,
-		ackOptions: ackOptions,
-		tcpF:       TCPF{tcpF: iterator.Iterator[conf.TCPF]{Items: cfg.TCP.LF}, clientTCPF: make(map[uint64]*iterator.Iterator[conf.TCPF])},
-		time:       uint32(time.Now().UnixNano() / int64(time.Millisecond)),
+		handle:    handle,
+		srcIP4:    cfg.IPv4,
+		srcIP6:    cfg.IPv6,
+		srcPort:   uint16(cfg.Port),
+		tcpF:      TCPF{tcpF: iterator.Iterator[conf.TCPF]{Items: cfg.TCP.LF}, clientTCPF: make(map[uint64]*iterator.Iterator[conf.TCPF])},
+		time:      rand.Uint32(), // Random start time for Seq/Ack obfuscation
+		tsCounter: rand.Uint32(), // Random start counter
 		ethPool: sync.Pool{
 			New: func() any {
 				return &layers.Ethernet{SrcMAC: cfg.Interface.HardwareAddr}
@@ -102,27 +88,24 @@ func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
 			},
 		},
 	}
-	if cfg.IPv4.Addr != nil {
-		sh.srcIPv4 = cfg.IPv4.Addr.IP
-		sh.srcIPv4RHWA = cfg.IPv4.Router
-	}
-	if cfg.IPv6.Addr != nil {
-		sh.srcIPv6 = cfg.IPv6.Addr.IP
-		sh.srcIPv6RHWA = cfg.IPv6.Router
-	}
 	return sh, nil
 }
 
 func (h *SendHandle) buildIPv4Header(dstIP net.IP) *layers.IPv4 {
 	ip := h.ipv4Pool.Get().(*layers.IPv4)
+	
+	// Realistic TOS values (most traffic is 0, some CS1/AF classes)
+	tosValues := []uint8{0, 0, 0, 0, 0, 8, 16, 32} // Weighted towards 0
+	tos := tosValues[rand.Intn(len(tosValues))]
+	
 	*ip = layers.IPv4{
 		Version:  4,
 		IHL:      5,
-		TOS:      184,
-		TTL:      64,
+		TOS:      tos,
+		TTL:      64, // Realistic Linux default TTL
 		Flags:    layers.IPv4DontFragment,
 		Protocol: layers.IPProtocolTCP,
-		SrcIP:    h.srcIPv4,
+		SrcIP:    h.srcIP4.Addr.IP,
 		DstIP:    dstIP,
 	}
 	return ip
@@ -130,12 +113,17 @@ func (h *SendHandle) buildIPv4Header(dstIP net.IP) *layers.IPv4 {
 
 func (h *SendHandle) buildIPv6Header(dstIP net.IP) *layers.IPv6 {
 	ip := h.ipv6Pool.Get().(*layers.IPv6)
+	
+	// Realistic TrafficClass values
+	tcValues := []uint8{0, 0, 0, 0, 0, 8, 16, 32}
+	tc := tcValues[rand.Intn(len(tcValues))]
+	
 	*ip = layers.IPv6{
 		Version:      6,
-		TrafficClass: 184,
-		HopLimit:     64,
+		TrafficClass: tc,
+		HopLimit:     64, // Realistic Linux default HopLimit
 		NextHeader:   layers.IPProtocolTCP,
-		SrcIP:        h.srcIPv6,
+		SrcIP:        h.srcIP6.Addr.IP,
 		DstIP:        dstIP,
 	}
 	return ip
@@ -147,30 +135,95 @@ func (h *SendHandle) buildTCPHeader(dstPort uint16, f conf.TCPF) *layers.TCP {
 		SrcPort: layers.TCPPort(h.srcPort),
 		DstPort: layers.TCPPort(dstPort),
 		FIN:     f.FIN, SYN: f.SYN, RST: f.RST, PSH: f.PSH, ACK: f.ACK, URG: f.URG, ECE: f.ECE, CWR: f.CWR, NS: f.NS,
-		Window: 65535,
+		Window:  uint16(32768 + rand.Intn(32768)), // Random Window between 32768 and 65535
 	}
 
 	counter := atomic.AddUint32(&h.tsCounter, 1)
 	tsVal := h.time + (counter >> 3)
+
+	// Random padding (0-15 bytes, aligned to 4 bytes if possible, but NOPs are 1 byte)
+	// TCP header size should be multiple of 4.
+	// Base options length needs to be calculated.
+	// We will construct options dynamically.
+
+	var opts []layers.TCPOption
+
 	if f.SYN {
-		binary.BigEndian.PutUint32(h.synOptions[2].OptionData[0:4], tsVal)
-		binary.BigEndian.PutUint32(h.synOptions[2].OptionData[4:8], 0)
-		tcp.Options = h.synOptions
-		tcp.Seq = 1 + (counter & 0x7)
+		// Build SYN options with randomized order and values
+		opts = make([]layers.TCPOption, 0, 10)
+		
+		// Randomize MSS (1380-1460)
+		mssValues := []uint16{1380, 1400, 1420, 1440, 1460}
+		mss := mssValues[rand.Intn(len(mssValues))]
+		mssData := make([]byte, 2)
+		binary.BigEndian.PutUint16(mssData, mss)
+		
+		// Randomize WindowScale (7, 8, 9)
+		wsValues := []byte{7, 8, 9}
+		ws := wsValues[rand.Intn(len(wsValues))]
+		
+		// Timestamp data
+		tsData := make([]byte, 8)
+		binary.BigEndian.PutUint32(tsData[0:4], tsVal)
+		binary.BigEndian.PutUint32(tsData[4:8], 0)
+		
+		// Randomize option order (3 variations)
+		orderVariation := rand.Intn(3)
+		switch orderVariation {
+		case 0: // Standard order
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: mssData})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindSACKPermitted, OptionLength: 2})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: tsData})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindWindowScale, OptionLength: 3, OptionData: []byte{ws}})
+		case 1: // Alternate order 1
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: mssData})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindWindowScale, OptionLength: 3, OptionData: []byte{ws}})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: tsData})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindSACKPermitted, OptionLength: 2})
+		case 2: // Alternate order 2
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: mssData})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindSACKPermitted, OptionLength: 2})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: tsData})
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindWindowScale, OptionLength: 3, OptionData: []byte{ws}})
+		}
+		
+		tcp.Seq = 1 + (counter & 0x7) + uint32(rand.Intn(100)) // Add jitter to Seq
 		tcp.Ack = 0
 		if f.ACK {
 			tcp.Ack = tcp.Seq + 1
 		}
 	} else {
+		// ACK Options with variable NOP count
+		nopCount := rand.Intn(3) + 1 // 1-3 NOPs
+		opts = make([]layers.TCPOption, 0, 8)
+		
+		for i := 0; i < nopCount; i++ {
+			opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+		}
+		
 		tsEcr := tsVal - (counter%200 + 50)
-		binary.BigEndian.PutUint32(h.ackOptions[2].OptionData[0:4], tsVal)
-		binary.BigEndian.PutUint32(h.ackOptions[2].OptionData[4:8], tsEcr)
-		tcp.Options = h.ackOptions
-		seq := h.time + (counter << 7)
+		tsData := make([]byte, 8)
+		binary.BigEndian.PutUint32(tsData[0:4], tsVal)
+		binary.BigEndian.PutUint32(tsData[4:8], tsEcr)
+		opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: tsData})
+		
+		seq := h.time + (counter << 7) + uint32(rand.Intn(500)) // Add jitter to Seq
 		tcp.Seq = seq
 		tcp.Ack = seq - (counter & 0x3FF) + 1400
 	}
 
+	// Add Random Padding using NOPs
+	paddingBytes := rand.Intn(4) * 4 // 0, 4, 8, 12 bytes
+	for i := 0; i < paddingBytes; i++ {
+		opts = append(opts, layers.TCPOption{OptionType: layers.TCPOptionKindNop})
+	}
+
+	tcp.Options = opts
 	return tcp
 }
 
@@ -196,14 +249,14 @@ func (h *SendHandle) Write(payload []byte, addr *net.UDPAddr) error {
 		defer h.ipv4Pool.Put(ip)
 		ipLayer = ip
 		tcpLayer.SetNetworkLayerForChecksum(ip)
-		ethLayer.DstMAC = h.srcIPv4RHWA
+		ethLayer.DstMAC = h.srcIP4.Router.HardwareAddr
 		ethLayer.EthernetType = layers.EthernetTypeIPv4
 	} else {
 		ip := h.buildIPv6Header(dstIP)
 		defer h.ipv6Pool.Put(ip)
 		ipLayer = ip
 		tcpLayer.SetNetworkLayerForChecksum(ip)
-		ethLayer.DstMAC = h.srcIPv6RHWA
+		ethLayer.DstMAC = h.srcIP6.Router.HardwareAddr
 		ethLayer.EthernetType = layers.EthernetTypeIPv6
 	}
 

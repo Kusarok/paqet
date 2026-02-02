@@ -1,0 +1,15 @@
+role: "server"
+log:
+  level: "debug"
+listen:
+  addr: ":9999"
+network:
+  interface: "ens4"
+  ipv4:
+    addr: "10.132.0.4:9999"
+    router_mac: "42:01:0a:84:00:01"
+transport:
+  protocol: "kcp"
+  kcp:
+    block: "aes"
+    key: "demo-key"

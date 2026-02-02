@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"paqet/internal/conf"
+	"paqet/internal/flog"
 	"sync/atomic"
 	"time"
 )
@@ -25,9 +26,13 @@ type PacketConn struct {
 // &OpError{Op: "listen", Net: network, Source: nil, Addr: nil, Err: err}
 func New(ctx context.Context, cfg *conf.Network) (*PacketConn, error) {
 	if cfg.Port == 0 {
-		cfg.Port = 32768 + rand.Intn(32768)
+		port := 32768 + rand.Intn(32768)
+		cfg.Port = port
+		cfg.IPv4.Addr.Port = port
+		cfg.IPv6.Addr.Port = port
 	}
 
+	flog.Warnf("PCONN Port: %d", cfg.Port)
 	sendHandle, err := NewSendHandle(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create send handle on %s: %v", cfg.Interface.Name, err)

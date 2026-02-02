@@ -1,6 +1,7 @@
 package kcp
 
 import (
+	"math/rand"
 	"paqet/internal/conf"
 	"time"
 
@@ -24,17 +25,23 @@ func aplConf(conn *kcp.UDPSession, cfg *conf.KCP) {
 	case "fast3":
 		noDelay, interval, resend, noCongestion = 1, 10, 2, 1
 		wDelay, ackNoDelay = false, true
-	case "manual":
-		noDelay, interval, resend, noCongestion = cfg.NoDelay, cfg.Interval, cfg.Resend, cfg.NoCongestion
-		wDelay, ackNoDelay = cfg.WDelay, cfg.AckNoDelay
 	}
 
-	conn.SetNoDelay(noDelay, interval, resend, noCongestion)
+	// Add jitter to interval for timing obfuscation
+	intervalJitter := interval + rand.Intn(5) - 2 // ±2ms randomness
+	if intervalJitter < 5 {
+		intervalJitter = 5
+	}
+	
+	conn.SetNoDelay(noDelay, intervalJitter, resend, noCongestion)
 	conn.SetWindowSize(cfg.Sndwnd, cfg.Rcvwnd)
 	conn.SetMtu(cfg.MTU)
 	conn.SetWriteDelay(wDelay)
 	conn.SetACKNoDelay(ackNoDelay)
-	conn.SetDSCP(46)
+	
+	// Randomize DSCP to avoid fingerprinting (0=normal, 8=CS1, 10=AF11, 18=AF21)
+	dscpValues := []int{0, 0, 0, 8, 10, 18} // Weighted towards 0 (normal traffic)
+	conn.SetDSCP(dscpValues[rand.Intn(len(dscpValues))])
 }
 
 func smuxConf(cfg *conf.KCP) *smux.Config {

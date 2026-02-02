@@ -2,6 +2,7 @@ package run
 
 import (
 	"log"
+	"os"
 	"paqet/internal/conf"
 	"paqet/internal/flog"
 
@@ -19,6 +20,20 @@ var Cmd = &cobra.Command{
 	Short: "Runs the client or server based on the config file.",
 	Long:  `The 'run' command reads the specified YAML configuration file.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Check if config file exists
+		if _, err := os.Stat(confPath); os.IsNotExist(err) {
+			flog.Infof("Configuration file '%s' not found.", confPath)
+			runSetup()
+			return
+		}
+
+		// Check if config file exists
+		if _, err := os.Stat(confPath); os.IsNotExist(err) {
+			flog.Infof("Configuration file '%s' not found, starting setup...", confPath)
+			runSetup()
+			return
+		}
+
 		cfg, err := conf.LoadFromFile(confPath)
 		if err != nil {
 			log.Fatalf("Failed to load configuration: %v", err)

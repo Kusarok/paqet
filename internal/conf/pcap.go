@@ -12,9 +12,9 @@ type PCAP struct {
 func (p *PCAP) setDefaults(role string) {
 	if p.Sockbuf == 0 {
 		if role == "server" {
-			p.Sockbuf = 8 * 1024 * 1024
+			p.Sockbuf = 2 * 1024 * 1024 // Reduced from 8MB to 2MB
 		} else {
-			p.Sockbuf = 4 * 1024 * 1024
+			p.Sockbuf = 1 * 1024 * 1024 // Reduced from 4MB to 1MB
 		}
 	}
 }
