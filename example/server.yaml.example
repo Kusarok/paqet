@@ -14,6 +14,7 @@ listen:
 network:
   interface: "eth0"                          # CHANGE ME: Network interface (eth0, ens3, en0, etc.)
   # guid: "\Device\NPF_{...}"                # Windows only (Npcap).
+  obfuscation_key: "your-obfuscation-key"    # CHANGE ME: Key for dynamic packet obfuscation (must match client)
   
   # IPv4 configuration
   ipv4:

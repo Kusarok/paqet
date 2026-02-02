@@ -29,7 +29,8 @@ func (k *KCP) setDefaults(role string) {
 		k.Mode = "fast"
 	}
 	if k.MTU == 0 {
-		k.MTU = 1350
+		// Default MTU reduced by 4 bytes to accommodate obfuscation overhead (2 bytes nonce + 2 bytes safety margin)
+		k.MTU = 1346
 	}
 
 	if k.Rcvwnd == 0 {

@@ -16,6 +16,7 @@ type PacketConn struct {
 	cfg           *conf.Network
 	sendHandle    *SendHandle
 	recvHandle    *RecvHandle
+	obfuscator    *Obfuscator
 	readDeadline  atomic.Value
 	writeDeadline atomic.Value
 
@@ -48,8 +49,13 @@ func New(ctx context.Context, cfg *conf.Network) (*PacketConn, error) {
 		cfg:        cfg,
 		sendHandle: sendHandle,
 		recvHandle: recvHandle,
+		obfuscator: NewObfuscator(cfg.ObfuscationKey),
 		ctx:        ctx,
 		cancel:     cancel,
+	}
+
+	if conn.obfuscator.IsEnabled() {
+		flog.Warnf("Packet obfuscation enabled (overhead: %d bytes)", conn.obfuscator.GetOverhead())
 	}
 
 	return conn, nil
@@ -76,7 +82,15 @@ func (c *PacketConn) ReadFrom(data []byte) (n int, addr net.Addr, err error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	n = copy(data, payload)
+
+	// Deobfuscate received data
+	deobfuscated, ok := c.obfuscator.Deobfuscate(payload)
+	if !ok {
+		// Silent drop for malformed packets (protection against active probing)
+		return 0, addr, nil
+	}
+
+	n = copy(data, deobfuscated)
 
 	return n, addr, nil
 }
@@ -103,7 +117,10 @@ func (c *PacketConn) WriteTo(data []byte, addr net.Addr) (n int, err error) {
 		return 0, net.InvalidAddrError("invalid address")
 	}
 
-	err = c.sendHandle.Write(data, daddr)
+	// Apply obfuscation before sending
+	payload := c.obfuscator.Obfuscate(data)
+
+	err = c.sendHandle.Write(payload, daddr)
 	if err != nil {
 		return 0, err
 	}

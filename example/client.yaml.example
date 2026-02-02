@@ -22,6 +22,7 @@ socks5:
 network:
   interface: "en0"                          # CHANGE ME: Network interface (en0, eth0, wlan0, etc.)
   # guid: "\Device\NPF_{...}"               # Windows only (Npcap).
+  obfuscation_key: "your-obfuscation-key"    # CHANGE ME: Key for dynamic packet obfuscation (must match server)
   
   # IPv4 configuration
   ipv4:
